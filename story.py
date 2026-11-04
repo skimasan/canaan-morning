@@ -28,7 +28,8 @@ IG = "https://graph.instagram.com/v26.0"
 PIXABAY = "https://pixabay.com/api/"
 WEATHER = "https://api.open-meteo.com/v1/forecast?latitude=43.2389&longitude=76.8897&current=temperature_2m,weather_code&daily=temperature_2m_max&timezone=Asia/Almaty&forecast_days=3"
 ALMATY = D.timezone(D.timedelta(hours=5))
-MIN_W, MIN_H = 720, 1100
+MIN_W, MIN_H = 700, 1100
+LARGE = 1280  # Pixabay gives this size on the long side
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
 WEEK = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 
@@ -200,7 +201,8 @@ def photos(query):
     d = get_json(PIXABAY + "?" + P.urlencode({"key": key, "q": query, "image_type": "photo", "orientation": "vertical", "safesearch": "true", "order": "popular", "per_page": 60, "min_width": MIN_W, "min_height": MIN_H}))
     used = json.loads(USED.read_text()) if USED.exists() else {}
     seen = {v["photo_id"] for v in used.values() if v.get("photo_id")}
-    rows = [p for p in d["hits"] if p["id"] not in seen and not p.get("isAiGenerated") and not p.get("isLowQuality")][:12]
+    wide = lambda p: p["imageWidth"] * LARGE / p["imageHeight"] >= MIN_W
+    rows = [p for p in d["hits"] if p["id"] not in seen and wide(p) and not p.get("isAiGenerated") and not p.get("isLowQuality")][:12]
     if not rows:
         raise Stop(f"No new photos for: {query}")
     TMP.mkdir(exist_ok=True)
