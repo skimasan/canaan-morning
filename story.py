@@ -1,8 +1,8 @@
 # Canaan morning Story - runs in a Claude cloud session, no Mac needed.
-#   python3 story.py verse "Фил 3:13-14"            text from the database, checked against saved YouVersion fingerprints
+#   python3 story.py verse "Фил 3:13-14" [--use=yv|db]   text from the database, checked against saved YouVersion data
 #   python3 story.py find "забывая заднее"          find an address by words
 #   python3 story.py photos "sunrise mountain mist" numbered contact sheet from Pixabay: .tmp/sheet.jpg
-#   python3 story.py render "Фил 3:13-14" <number> [--tone=warm|cool] [--date=YYYY-MM-DD]
+#   python3 story.py render "Фил 3:13-14" <number> [--tone=warm|cool] [--date=YYYY-MM-DD] [--use=yv|db]
 #   python3 story.py publish YYYY-MM-DD             publish the pushed story.jpg to Instagram Stories
 # Keys are not in this repository: the cloud proxy adds the Instagram key, the Pixabay key is the environment variable PIXABAY_KEY.
 # Any problem stops the run. Nothing is guessed.
@@ -118,22 +118,34 @@ def parse_ref(ref):
     return ru, code, f"{name} {span}", (c1, v1), (c2, v2)
 
 
-def check_youversion(code, rows):
-    """Words and punctuation must match the YouVersion SYNO fingerprints saved from the Mac."""
+def check_youversion(code, rows, use):
+    """Each verse must match YouVersion SYNO. Accents, ё and reading marks do not count.
+    A real difference stops the run, so Kim can choose. use='yv' or 'db' is that choice. Returns the verses to print."""
     saved = json.loads((BIBLE / "yv_all.json").read_text())
     accepted = json.loads((BIBLE / "accepted.json").read_text())
+    differs = json.loads((BIBLE / "yv_diff.json").read_text())
     h = lambda s: hashlib.sha256(s.encode()).hexdigest()[:8]
+    out = []
     for ch, v, t in rows:
         key = f"{code}.{ch}"
         got = saved.get(key, {}).get(str(v))
         if not got:
             raise Stop(f"Not checked against YouVersion: {key}:{v}. Text in the database: {t}")
         words = re.sub(r"[^а-я0-9]", "", t.lower().replace("ё", "е"))
-        if (h(words) != got[:8] or h(re.sub(r"\s+", "", t)) != got[8:]) and f"{key}.{v}" not in accepted:
-            raise Stop(f"Text differs from YouVersion SYNO: {key}:{v}. Text in the database: {t}")
+        same = h(words) == got[:8] and h(re.sub(r"\s+", "", t)) == got[8:]
+        other = differs.get(f"{key}.{v}")
+        if same or f"{key}.{v}" in accepted or not other:
+            out.append(t)
+        elif use == "yv":
+            out.append(other)
+        elif use == "db":
+            out.append(t)
+        else:
+            raise Stop(f"Text differs from YouVersion SYNO: {key}:{v}.\nYouVersion: {other}\nDatabase: {t}")
+    return out
 
 
-def read_verses(ref):
+def read_verses(ref, use=None):
     ru, code, label, a, b = parse_ref(ref)
     rows = open_db().execute("select chapter, verse, text from verses where book_ru=? and (chapter>? or (chapter=? and verse>=?)) and (chapter<? or (chapter=? and verse<=?)) order by chapter, verse",
                              (ru, a[0], a[0], a[1], b[0], b[0], b[1])).fetchall()
@@ -141,8 +153,7 @@ def read_verses(ref):
         raise Stop(f"Verses not found: {ref}")
     if any(not t.strip() for _, _, t in rows):
         raise Stop(f"Empty verse in: {ref}")
-    check_youversion(code, rows)
-    return label, " ".join(re.sub(r"\s+", " ", t).strip() for _, _, t in rows)
+    return label, " ".join(re.sub(r"\s+", " ", t).strip() for t in check_youversion(code, rows, use))
 
 
 def find(words):
@@ -286,10 +297,10 @@ def chrome(args, doc):
                            "--allow-file-access-from-files", "--virtual-time-budget=4000", *args, f.as_uri()], capture_output=True, text=True, timeout=120)
 
 
-def render(ref, n, day, tone):
+def render(ref, n, day, tone, use=None):
     if D.date.fromisoformat(day).weekday() >= 5:
         raise Stop(f"{day} is not a weekday")
-    label, text = read_verses(ref)
+    label, text = read_verses(ref, use)
     photo, info = fetch_photo(n)
     size = Image.open(photo).size
     if size[0] < MIN_W or size[1] < MIN_H or size[1] <= size[0]:
@@ -345,14 +356,14 @@ def main():
     opt = dict(x[2:].split("=", 1) for x in sys.argv[1:] if x.startswith("--"))
     day = opt.get("date", today())
     if a[0] == "verse":
-        label, text = read_verses(a[1])
+        label, text = read_verses(a[1], opt.get("use"))
         print(json.dumps({"label": label, "text": text, "chars": len(text), "font": fit(text)}, ensure_ascii=False))
     elif a[0] == "find":
         print(json.dumps(find(a[1]), ensure_ascii=False))
     elif a[0] == "photos":
         photos(a[1])
     elif a[0] == "render":
-        render(a[1], int(a[2]), day, opt.get("tone", "warm"))
+        render(a[1], int(a[2]), day, opt.get("tone", "warm"), opt.get("use"))
     elif a[0] == "publish":
         publish(a[1])
     else:
