@@ -1,10 +1,10 @@
 # Canaan morning Story - runs in a Claude cloud session, no Mac needed.
 #   python3 story.py verse "Фил 3:13-14"            text from the database, checked against saved YouVersion fingerprints
 #   python3 story.py find "забывая заднее"          find an address by words
-#   python3 story.py photos "sunrise mountain mist" numbered contact sheet from Pexels: .tmp/sheet.jpg
+#   python3 story.py photos "sunrise mountain mist" numbered contact sheet from Pixabay: .tmp/sheet.jpg
 #   python3 story.py render "Фил 3:13-14" <number> [--tone=warm|cool] [--date=YYYY-MM-DD]
 #   python3 story.py publish YYYY-MM-DD             publish the pushed story.jpg to Instagram Stories
-# Secrets stay outside the session: the cloud proxy adds the key for graph.instagram.com and api.pexels.com.
+# Keys are not in this repository: the cloud proxy adds the Instagram key, the Pixabay key is the environment variable PIXABAY_KEY.
 # Any problem stops the run. Nothing is guessed.
 import base64, datetime as D, hashlib, html, json, os, pathlib, re, shutil, sqlite3, subprocess, sys, time, urllib.error as E, urllib.parse as P, urllib.request as U
 
@@ -24,7 +24,7 @@ USED = ROOT / "used_photos.json"
 TMP = ROOT / ".tmp"
 RAW = "https://raw.githubusercontent.com/skimasan/canaan-morning/main/stories"
 IG = "https://graph.instagram.com/v26.0"
-PEXELS = "https://api.pexels.com/v1/search"
+PIXABAY = "https://pixabay.com/api/"
 WEATHER = "https://api.open-meteo.com/v1/forecast?latitude=43.2389&longitude=76.8897&current=temperature_2m,weather_code&daily=temperature_2m_max&timezone=Asia/Almaty&forecast_days=3"
 ALMATY = D.timezone(D.timedelta(hours=5))
 MIN_W, MIN_H = 720, 1100
@@ -182,10 +182,13 @@ def weather(day):
 # ---------- photos ----------
 
 def photos(query):
-    d = get_json(PEXELS + "?" + P.urlencode({"query": query, "orientation": "portrait", "size": "large", "per_page": 24}))
+    key = os.environ.get("PIXABAY_KEY")
+    if not key:
+        raise Stop("PIXABAY_KEY is not set in this environment")
+    d = get_json(PIXABAY + "?" + P.urlencode({"key": key, "q": query, "image_type": "photo", "orientation": "vertical", "safesearch": "true", "order": "popular", "per_page": 60, "min_width": MIN_W, "min_height": MIN_H}))
     used = json.loads(USED.read_text()) if USED.exists() else {}
     seen = {v["photo_id"] for v in used.values() if v.get("photo_id")}
-    rows = [p for p in d["photos"] if p["id"] not in seen and p["height"] > p["width"] and p["width"] >= MIN_W and p["height"] >= MIN_H][:12]
+    rows = [p for p in d["hits"] if p["id"] not in seen and not p.get("isAiGenerated") and not p.get("isLowQuality")][:12]
     if not rows:
         raise Stop(f"No new photos for: {query}")
     TMP.mkdir(exist_ok=True)
@@ -193,7 +196,7 @@ def photos(query):
     pen = ImageDraw.Draw(sheet)
     for i, p in enumerate(rows):
         f = TMP / f"thumb{i + 1}.jpg"
-        req = U.Request(p["src"]["medium"], headers={"User-Agent": "canaan-morning"})
+        req = U.Request(p["webformatURL"], headers={"User-Agent": "canaan-morning"})
         f.write_bytes(U.urlopen(req, timeout=40).read())
         im = Image.open(f).convert("RGB")
         im.thumbnail((296, 496))
@@ -202,8 +205,8 @@ def photos(query):
         pen.rectangle((x, y, x + 52, y + 34), fill="#000000")
         pen.text((x + 8, y + 8), str(i + 1), fill="#ffffff", font_size=24)
     sheet.save(TMP / "sheet.jpg", quality=88)
-    (TMP / "photos.json").write_text(json.dumps([{"n": i + 1, "id": p["id"], "url": p["url"], "author": p["photographer"], "alt": p.get("alt", ""), "src": p["src"]["original"]} for i, p in enumerate(rows)], ensure_ascii=False, indent=1))
-    print(json.dumps({"sheet": str(TMP / "sheet.jpg"), "list": str(TMP / "photos.json"), "photos": [{"n": i + 1, "alt": p.get("alt", "")} for i, p in enumerate(rows)]}, ensure_ascii=False))
+    (TMP / "photos.json").write_text(json.dumps([{"n": i + 1, "id": p["id"], "url": p["pageURL"], "author": p["user"], "tags": p.get("tags", ""), "src": p["largeImageURL"]} for i, p in enumerate(rows)], ensure_ascii=False, indent=1))
+    print(json.dumps({"sheet": str(TMP / "sheet.jpg"), "list": str(TMP / "photos.json"), "photos": [{"n": i + 1, "tags": p.get("tags", "")} for i, p in enumerate(rows)]}, ensure_ascii=False))
 
 
 def fetch_photo(n):
@@ -211,9 +214,8 @@ def fetch_photo(n):
     if n not in rows:
         raise Stop(f"No photo number {n}. Run photos first.")
     r = rows[n]
-    url = r["src"] + ("&" if "?" in r["src"] else "?") + "auto=compress&cs=tinysrgb&w=1440"
     f = TMP / "photo.jpg"
-    f.write_bytes(U.urlopen(U.Request(url, headers={"User-Agent": "canaan-morning"}), timeout=60).read())
+    f.write_bytes(U.urlopen(U.Request(r["src"], headers={"User-Agent": "canaan-morning"}), timeout=60).read())
     return f, r
 
 
