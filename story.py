@@ -11,10 +11,10 @@ import base64, datetime as D, hashlib, html, json, os, pathlib, re, shutil, sqli
 try:
     from PIL import Image, ImageDraw
 except ImportError:
-    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--user", "--break-system-packages", "pillow"], check=True)
-    import site, importlib
-    importlib.reload(site)
-    from PIL import Image, ImageDraw
+    # The cloud default python3 cannot load the system Pillow, /usr/bin/python3 can
+    if sys.executable != "/usr/bin/python3" and os.path.exists("/usr/bin/python3"):
+        os.execv("/usr/bin/python3", ["/usr/bin/python3", *sys.argv])
+    raise
 
 ROOT = pathlib.Path(__file__).resolve().parent
 ASSETS = ROOT / "assets"
