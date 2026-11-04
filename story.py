@@ -3,6 +3,7 @@
 #   python3 story.py find "забывая заднее"          find an address by words
 #   python3 story.py photos "sunrise mountain mist" numbered contact sheet from Pixabay: .tmp/sheet.jpg
 #   python3 story.py render "Фил 3:13-14" <number> [--tone=warm|cool] [--date=YYYY-MM-DD] [--use=yv|db]
+#   python3 story.py check                          check the Instagram key, nothing is published
 #   python3 story.py publish YYYY-MM-DD             publish the pushed story.jpg to Instagram Stories
 # Keys are not in this repository: the cloud proxy adds the Instagram key, the Pixabay key is the environment variable PIXABAY_KEY.
 # Any problem stops the run. Nothing is guessed.
@@ -360,6 +361,11 @@ def main():
         print(json.dumps({"label": label, "text": text, "chars": len(text), "font": fit(text)}, ensure_ascii=False))
     elif a[0] == "find":
         print(json.dumps(find(a[1]), ensure_ascii=False))
+    elif a[0] == "check":
+        name = get_json(f"{IG}/me?fields=username").get("username")
+        if name != "canaan_acc":
+            raise Stop(f"Instagram key belongs to another account: {name}")
+        print("OK: Instagram key works for canaan_acc")
     elif a[0] == "photos":
         photos(a[1])
     elif a[0] == "render":
