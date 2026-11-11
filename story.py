@@ -1,5 +1,5 @@
 # Canaan morning Story - runs in a Claude cloud session, no Mac needed.
-#   python3 story.py verse "Фил 3:13-14" [--use=yv|db]   text from the database, checked against saved YouVersion data
+#   python3 story.py verse "Фил 3:13-14" [--use=yv|db]   text from the database, checked against saved YouVersion data, and how it splits into Stories
 #   python3 story.py find "забывая заднее"          find an address by words
 #   python3 story.py photos "sunrise mountain mist" numbered contact sheet from Pixabay: .tmp/sheet.jpg
 #   python3 story.py render "Фил 3:13-14" <number> [--tone=warm|cool] [--date=YYYY-MM-DD] [--use=yv|db]
@@ -7,6 +7,7 @@
 #   python3 story.py publish YYYY-MM-DD             publish the pushed story.jpg to Instagram Stories
 # Keys are not in this repository: the cloud proxy adds the Instagram key, the Pixabay key is the environment variable PIXABAY_KEY.
 # Any problem stops the run. Nothing is guessed.
+from itertools import combinations
 import base64, datetime as D, hashlib, html, json, os, pathlib, re, shutil, sqlite3, subprocess, sys, time, urllib.error as E, urllib.parse as P, urllib.request as U
 
 try:
@@ -30,6 +31,7 @@ WEATHER = "https://api.open-meteo.com/v1/forecast?latitude=43.2389&longitude=76.
 ALMATY = D.timezone(D.timedelta(hours=5))
 MIN_W, MIN_H = 700, 1100
 LARGE = 1280  # Pixabay gives this size on the long side
+MAX_CHARS, MAX_PARTS = 380, 4  # one Story holds up to 380 characters, a longer passage goes into 2-4 Stories
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
 WEEK = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 
@@ -147,7 +149,8 @@ def check_youversion(code, rows, use):
     return out
 
 
-def read_verses(ref, use=None):
+def read_rows(ref, use=None):
+    """-> (full label, book name for labels, [(chapter, verse, checked text)])"""
     ru, code, label, a, b = parse_ref(ref)
     rows = open_db().execute("select chapter, verse, text from verses where book_ru=? and (chapter>? or (chapter=? and verse>=?)) and (chapter<? or (chapter=? and verse<=?)) order by chapter, verse",
                              (ru, a[0], a[0], a[1], b[0], b[0], b[1])).fetchall()
@@ -155,7 +158,38 @@ def read_verses(ref, use=None):
         raise Stop(f"Verses not found: {ref}")
     if any(not t.strip() for _, _, t in rows):
         raise Stop(f"Empty verse in: {ref}")
-    return label, " ".join(re.sub(r"\s+", " ", t).strip() for t in check_youversion(code, rows, use))
+    texts = [re.sub(r"\s+", " ", t).strip() for t in check_youversion(code, rows, use)]
+    name = label.rsplit(" ", 1)[0]
+    return label, name, [(ch, v, t) for (ch, v, _), t in zip(rows, texts)]
+
+
+def span(name, rows):
+    (c1, v1), (c2, v2) = rows[0][:2], rows[-1][:2]
+    return f"{name} {c1}:{v1}" if (c1, v1) == (c2, v2) else f"{name} {c1}:{v1}-{v2}" if c1 == c2 else f"{name} {c1}:{v1}-{c2}:{v2}"
+
+
+def split(ref, use=None):
+    """A long passage becomes 2-4 Stories, cut only between verses. The fewest parts, then the most even ones.
+    -> (full label, full text, [(part label, part text)])"""
+    label, name, rows = read_rows(ref, use)
+    size = lambda g: len(" ".join(t for _, _, t in g))
+    for ch, v, t in rows:
+        if len(t) > MAX_CHARS:
+            raise Stop(f"One verse is too long for a Story: {name} {ch}:{v}, {len(t)} characters. Ask Kim.")
+    best = None
+    for k in range(1, MAX_PARTS + 1):
+        # the most even way to cut the verses into k groups, by brute force over cut points (passages are short)
+        for cuts in combinations(range(1, len(rows)), k - 1):
+            groups = [rows[i:j] for i, j in zip((0, *cuts), (*cuts, len(rows)))]
+            worst = max(size(g) for g in groups)
+            if worst <= MAX_CHARS and (best is None or worst < best[0]):
+                best = (worst, groups)
+        if best:
+            break
+    if not best:
+        raise Stop(f"Passage is too long even for {MAX_PARTS} Stories: {size(rows)} characters. Ask Kim.")
+    parts = [(span(name, g), " ".join(t for _, _, t in g)) for g in best[1]]
+    return label, " ".join(t for _, _, t in rows), parts
 
 
 def find(words):
@@ -238,10 +272,10 @@ def fetch_photo(n):
 def fit(text):
     """Font size for the verse box. A longer verse is never cut: it stops the run."""
     n = len(text)
-    for limit, size in ((170, 20), (225, 18), (300, 16.5), (380, 15)):
+    for limit, size in ((170, 20), (225, 18), (300, 16.5), (MAX_CHARS, 15)):
         if n <= limit:
             return size
-    raise Stop(f"Verse is too long for one Story: {n} characters. Ask Kim.")
+    raise Stop(f"Text is too long for one Story: {n} characters. Ask Kim.")
 
 
 def nb(text):
@@ -249,8 +283,9 @@ def nb(text):
     return re.sub(r"(?<![а-яА-ЯёЁ])([а-яА-ЯёЁ]{1,2}) ", "\\1\u00a0", html.escape(text, quote=False))
 
 
-def card(day, wx, label, text, photo, tone):
-    """The title is a ready image from the Mac, so the Story looks the same without the Mac fonts."""
+def card(day, wx, label, text, photo, tone, part=1, parts=1):
+    """The title is a ready image from the Mac, so the Story looks the same without the Mac fonts.
+    Parts of one passage share the photo, the date and the weather, show 1/3, 2/3 and say «дальше» until the last one."""
     d = D.date.fromisoformat(day)
     base, shade = TONES[tone]
     when = f"{WEEK[d.weekday()]} · {d.day} {MONTHS[d.month - 1]}".upper()
@@ -272,9 +307,10 @@ def card(day, wx, label, text, photo, tone):
 <div style="font-size: 15px; font-weight: 500">днём {wx['day']}</div>
 </div>
 <div id="box" style="position: relative; margin-top: auto; align-self: stretch; padding: 16px 20px 20px; border: 2px solid #FFF4E0; border-radius: 20px; background: rgba({shade}, 0.6); backdrop-filter: blur(6px)">
-<div style="font-size: 13px; font-weight: 700; letter-spacing: 3px; padding-left: 3px">{label}</div>
+<div style="font-size: 13px; font-weight: 700; letter-spacing: 3px; padding-left: 3px">{label}{f" · {part}/{parts}" if parts > 1 else ""}</div>
 <div style="margin-top: 8px; font-weight: 500; font-size: {fit(text)}px; line-height: 1.38">{nb(text)}</div>
 </div>
+{f'<div style="position: absolute; right: 40px; bottom: 15px; font-size: 12px; font-weight: 700; letter-spacing: 3px; text-shadow: 0 1px 8px rgba({shade}, 0.6)">ДАЛЬШЕ →</div>' if part < parts else ""}
 </div>"""
 
 
@@ -303,40 +339,45 @@ def chrome(args, doc):
 def render(ref, n, day, tone, use=None):
     if D.date.fromisoformat(day).weekday() >= 5:
         raise Stop(f"{day} is not a weekday")
-    label, text = read_verses(ref, use)
+    folder = STORIES / day
+    if (folder / "meta.json").exists():
+        old = json.loads((folder / "meta.json").read_text())
+        if old.get("permalink") or any(x.get("media_id") for x in old.get("parts", [])):
+            raise Stop(f"Story for {day} is already published. It is not rebuilt.")
+    label, text, parts = split(ref, use)
     photo, info = fetch_photo(n)
     size = Image.open(photo).size
     if size[0] < MIN_W or size[1] < MIN_H or size[1] <= size[0]:
         raise Stop(f"Photo is too small or not vertical: {size}")
     wx = weather(day)
-    doc = page(card(day, wx, label, text, photo.as_uri(), tone))
-    png = TMP / "story.png"
-    png.unlink(missing_ok=True)
-    r = chrome([f"--screenshot={png}"], doc)
-    if not png.exists():
-        raise Stop(f"Chrome did not render: {r.stderr[-300:]}")
-    if Image.open(png).size != (1080, 1920):
-        raise Stop(f"Wrong Story size: {Image.open(png).size}")
-    probe = doc.replace("</body>", "<script>const b=document.getElementById('box').getBoundingClientRect();document.body.dataset.box=Math.round(b.bottom)+','+Math.round(b.top)</script></body>")
-    m = re.search(r'data-box="(\d+),(\d+)"', chrome(["--dump-dom"], probe).stdout)
-    if not m or int(m[1]) > 760 or int(m[2]) < 470:
-        raise Stop(f"Verse box does not fit: {m and m.groups()}")
-    folder = STORIES / day
     folder.mkdir(parents=True, exist_ok=True)
-    Image.open(png).convert("RGB").save(folder / "story.jpg", quality=93, subsampling=0)
-    (folder / "meta.json").write_text(json.dumps({"date": day, "ref": ref, "label": label, "text": text, "weather": wx, "photo": info["url"], "photo_id": info["id"], "author": info["author"], "tone": tone}, ensure_ascii=False, indent=1))
+    out = []
+    for i, (part_label, part_text) in enumerate(parts, 1):
+        doc = page(card(day, wx, part_label, part_text, photo.as_uri(), tone, i, len(parts)))
+        png = TMP / "story.png"
+        png.unlink(missing_ok=True)
+        r = chrome([f"--screenshot={png}"], doc)
+        if not png.exists():
+            raise Stop(f"Chrome did not render: {r.stderr[-300:]}")
+        if Image.open(png).size != (1080, 1920):
+            raise Stop(f"Wrong Story size: {Image.open(png).size}")
+        probe = doc.replace("</body>", "<script>const b=document.getElementById('box').getBoundingClientRect();document.body.dataset.box=Math.round(b.bottom)+','+Math.round(b.top)</script></body>")
+        m = re.search(r'data-box="(\d+),(\d+)"', chrome(["--dump-dom"], probe).stdout)
+        if not m or int(m[1]) > 760 or int(m[2]) < 470:
+            raise Stop(f"Verse box does not fit in part {i}: {m and m.groups()}")
+        # one Story keeps the old name story.jpg, parts are story-1.jpg, story-2.jpg, ...
+        name = "story.jpg" if len(parts) == 1 else f"story-{i}.jpg"
+        Image.open(png).convert("RGB").save(folder / name, quality=93, subsampling=0)
+        out.append({"file": name, "label": part_label, "text": part_text})
+    (folder / "meta.json").write_text(json.dumps({"date": day, "ref": ref, "label": label, "text": text, "weather": wx, "photo": info["url"], "photo_id": info["id"], "author": info["author"], "tone": tone, "parts": out}, ensure_ascii=False, indent=1))
     used = json.loads(USED.read_text()) if USED.exists() else {}
     used[day] = {"photo_id": info["id"]}
     USED.write_text(json.dumps(used, indent=1))
-    print(json.dumps({"jpg": str(folder / "story.jpg"), "label": label, "weather": wx, "chars": len(text), "url_after_push": f"{RAW}/{day}/story.jpg"}, ensure_ascii=False))
+    print(json.dumps({"parts": len(out), "jpg": [str(folder / x["file"]) for x in out], "labels": [x["label"] for x in out], "weather": wx,
+                      "url_after_push": [f"{RAW}/{day}/{x['file']}" for x in out]}, ensure_ascii=False))
 
 
-def publish(day):
-    folder = STORIES / day
-    meta = json.loads((folder / "meta.json").read_text())
-    if meta.get("permalink") or meta.get("media_id"):
-        raise Stop(f"Already published: {meta.get('permalink') or meta.get('media_id')}")
-    url = f"{RAW}/{day}/story.jpg"
+def publish_one(url):
     made = get_json(f"{IG}/me/media", data=P.urlencode({"media_type": "STORIES", "image_url": url}).encode(), method="POST")["id"]
     for _ in range(36):
         code = get_json(f"{IG}/{made}?fields=status_code,status")
@@ -348,10 +389,25 @@ def publish(day):
     else:
         raise Stop("Instagram took too long")
     media = get_json(f"{IG}/me/media_publish", data=P.urlencode({"creation_id": made}).encode(), method="POST")["id"]
-    link = get_json(f"{IG}/{media}?fields=permalink").get("permalink")
-    meta.update(media_id=media, permalink=link)
+    return media, get_json(f"{IG}/{media}?fields=permalink").get("permalink")
+
+
+def publish(day):
+    """Parts go out in order. A part that is already out is skipped, so a stopped run can go on."""
+    folder = STORIES / day
+    meta = json.loads((folder / "meta.json").read_text())
+    if meta.get("permalink") or meta.get("media_id"):
+        raise Stop(f"Already published: {meta.get('permalink') or meta.get('media_id')}")
+    parts = meta.get("parts") or [{"file": "story.jpg"}]
+    for x in parts:
+        if x.get("media_id"):
+            continue
+        x["media_id"], x["permalink"] = publish_one(f"{RAW}/{day}/{x['file']}")
+        meta["parts"] = parts
+        (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1))
+    meta.update(media_id=parts[0]["media_id"], permalink=parts[0]["permalink"])
     (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1))
-    print(json.dumps({"media_id": media, "permalink": link}))
+    print(json.dumps({"permalink": [x["permalink"] for x in parts]}))
 
 
 def main():
@@ -359,8 +415,9 @@ def main():
     opt = dict(x[2:].split("=", 1) for x in sys.argv[1:] if x.startswith("--"))
     day = opt.get("date", today())
     if a[0] == "verse":
-        label, text = read_verses(a[1], opt.get("use"))
-        print(json.dumps({"label": label, "text": text, "chars": len(text), "font": fit(text)}, ensure_ascii=False))
+        label, text, parts = split(a[1], opt.get("use"))
+        print(json.dumps({"label": label, "text": text, "chars": len(text), "stories": len(parts),
+                          "parts": [{"label": l, "chars": len(t), "font": fit(t)} for l, t in parts]}, ensure_ascii=False))
     elif a[0] == "find":
         print(json.dumps(find(a[1]), ensure_ascii=False))
     elif a[0] == "check":
