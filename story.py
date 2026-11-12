@@ -27,7 +27,8 @@ TMP = ROOT / ".tmp"
 RAW = "https://raw.githubusercontent.com/skimasan/canaan-morning/main/stories"
 IG = "https://graph.instagram.com/v26.0"
 PIXABAY = "https://pixabay.com/api/"
-WEATHER = "https://api.open-meteo.com/v1/forecast?latitude=43.2389&longitude=76.8897&current=temperature_2m,weather_code&daily=temperature_2m_max&timezone=Asia/Almaty&forecast_days=3"
+OPEN_METEO = "https://api.open-meteo.com/v1/forecast?latitude=43.2389&longitude=76.8897&current=temperature_2m,weather_code&daily=temperature_2m_max&timezone=Asia/Almaty&forecast_days=3"
+MET_NO = "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=43.2389&lon=76.8897"
 ALMATY = D.timezone(D.timedelta(hours=5))
 MIN_W, MIN_H = 700, 1100
 LARGE = 1280  # Pixabay gives this size on the long side
@@ -217,13 +218,57 @@ def deg(x):
     return f"+{n}°" if n > 0 else f"{n}°"
 
 
-def weather(day):
-    d = get_json(WEATHER)
+def met_word(code):
+    """met.no symbol, for example lightrain_showers_day, to a word and an icon."""
+    c = code.split("_")[0]
+    if "thunder" in c: return "гроза", "storm"
+    if "sleet" in c: return "мокрый снег", "snow"
+    if "snow" in c: return "снег", "snow"
+    if c.startswith("light") and "rain" in c: return "морось", "rain"
+    if "rain" in c: return "дождь", "rain"
+    if c == "fog": return "туман", "fog"
+    if c == "cloudy": return "облачно", "cloud"
+    if c in ("partlycloudy", "fair"): return "малооблачно", "partly"
+    if c == "clearsky": return "ясно", "sun"
+    raise Stop(f"Unknown weather code: {code}")
+
+
+def from_open_meteo(day):
+    d = get_json(OPEN_METEO)
     days = d["daily"]["time"]
     if day not in days:
         raise Stop(f"No forecast for {day}")
     word, icon = wmo(d["current"]["weather_code"])
-    return {"now": deg(d["current"]["temperature_2m"]), "word": word, "icon": icon, "day": deg(d["daily"]["temperature_2m_max"][days.index(day)]), "at": d["current"]["time"]}
+    return {"now": deg(d["current"]["temperature_2m"]), "word": word, "icon": icon, "day": deg(d["daily"]["temperature_2m_max"][days.index(day)]), "at": d["current"]["time"], "source": "open-meteo"}
+
+
+def from_met_no(day):
+    rows = []
+    for x in get_json(MET_NO)["properties"]["timeseries"]:
+        t = D.datetime.fromisoformat(x["time"].replace("Z", "+00:00")).astimezone(ALMATY)
+        if t.date().isoformat() == day:
+            rows.append((t, x["data"]))
+    if not rows:
+        raise Stop(f"No forecast for {day}")
+    t, now = rows[0]
+    code = (now.get("next_1_hours") or now.get("next_6_hours"))["summary"]["symbol_code"]
+    word, icon = met_word(code)
+    top = max(r["instant"]["details"]["air_temperature"] for _, r in rows)
+    return {"now": deg(now["instant"]["details"]["air_temperature"]), "word": word, "icon": icon, "day": deg(top), "at": t.strftime("%Y-%m-%dT%H:%M"), "source": "met.no"}
+
+
+def weather(day):
+    """Two weather services, two tries each. If both fail, the Story goes out without weather."""
+    errors = []
+    for source in (from_met_no, from_open_meteo):
+        for attempt in range(2):
+            try:
+                return source(day)
+            except Exception as e:  # a blocked host, a limit, a timeout or a changed answer
+                errors.append(f"{source.__name__}: {str(e)[:160]}")
+                time.sleep(3)
+    print("WEATHER: no weather today, the Story has no weather line. " + " | ".join(errors), file=sys.stderr)
+    return None
 
 
 # ---------- photos ----------
@@ -283,6 +328,18 @@ def nb(text):
     return re.sub(r"(?<![а-яА-ЯёЁ])([а-яА-ЯёЁ]{1,2}) ", "\\1\u00a0", html.escape(text, quote=False))
 
 
+def weather_line(wx, shade):
+    if not wx:
+        return ""
+    return f"""<div style="position: relative; margin-top: 18px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-shadow: 0 1px 8px rgba({shade}, 0.6)">
+<div style="display: flex; align-items: center; justify-content: center; gap: 12px">
+<svg width="34" height="34" viewBox="0 0 44 44" fill="none" stroke="#FFF4E0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{ICONS[wx['icon']]}</svg>
+<div style="font-size: 22px; font-weight: 700">{wx['now']} {wx['word']}</div>
+</div>
+<div style="font-size: 15px; font-weight: 500">днём {wx['day']}</div>
+</div>"""
+
+
 def card(day, wx, label, text, photo, tone, part=1, parts=1):
     """The title is a ready image from the Mac, so the Story looks the same without the Mac fonts.
     Parts of one passage share the photo, the date and the weather, show 1/3, 2/3 and say «дальше» until the last one."""
@@ -299,13 +356,7 @@ def card(day, wx, label, text, photo, tone, part=1, parts=1):
 <span>{when}</span>
 <div style="flex-grow: 1; height: 1px; background: #FFF4E0; opacity: 0.7"></div>
 </div>
-<div style="position: relative; margin-top: 18px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-shadow: 0 1px 8px rgba({shade}, 0.6)">
-<div style="display: flex; align-items: center; justify-content: center; gap: 12px">
-<svg width="34" height="34" viewBox="0 0 44 44" fill="none" stroke="#FFF4E0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{ICONS[wx['icon']]}</svg>
-<div style="font-size: 22px; font-weight: 700">{wx['now']} {wx['word']}</div>
-</div>
-<div style="font-size: 15px; font-weight: 500">днём {wx['day']}</div>
-</div>
+{weather_line(wx, shade)}
 <div id="box" style="position: relative; margin-top: auto; align-self: stretch; padding: 16px 20px 20px; border: 2px solid #FFF4E0; border-radius: 20px; background: rgba({shade}, 0.6); backdrop-filter: blur(6px)">
 <div style="font-size: 13px; font-weight: 700; letter-spacing: 3px; padding-left: 3px">{label}{f" · {part}/{parts}" if parts > 1 else ""}</div>
 <div style="margin-top: 8px; font-weight: 500; font-size: {fit(text)}px; line-height: 1.38">{nb(text)}</div>
