@@ -1,0 +1,25 @@
+{
+ "date": "2026-11-12",
+ "ref": "1 Царств 17:24",
+ "label": "1 ЦАРСТВ 17:24",
+ "text": "И все Израильтяне, увидев этого человека, убегали от него и весьма боялись.",
+ "weather": {
+  "now": "+1°",
+  "word": "мокрый снег",
+  "icon": "snow",
+  "day": "+2°",
+  "at": "2026-11-12T09:00",
+  "source": "met.no"
+ },
+ "photo": "https://pixabay.com/photos/fog-trees-vineyard-nature-mystical-7440132/",
+ "photo_id": 7440132,
+ "author": "Nordseher",
+ "tone": "warm",
+ "parts": [
+  {
+   "file": "story.jpg",
+   "label": "1 ЦАРСТВ 17:24",
+   "text": "И все Израильтяне, увидев этого человека, убегали от него и весьма боялись."
+  }
+ ]
+}
