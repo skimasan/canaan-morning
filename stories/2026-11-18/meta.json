@@ -1,0 +1,25 @@
+{
+ "date": "2026-11-18",
+ "ref": "Притчи 18:14",
+ "label": "ПРИТЧИ 18:14",
+ "text": "Кто дает ответ не выслушав, тот глуп, и стыд ему.",
+ "weather": {
+  "now": "+11°",
+  "word": "облачно",
+  "icon": "cloud",
+  "day": "+11°",
+  "at": "2026-11-18T13:00",
+  "source": "met.no"
+ },
+ "photo": "https://pixabay.com/photos/tree-nature-landscape-fog-scenic-4481688/",
+ "photo_id": 4481688,
+ "author": "SilviaStoedter",
+ "tone": "warm",
+ "parts": [
+  {
+   "file": "story.jpg",
+   "label": "ПРИТЧИ 18:14",
+   "text": "Кто дает ответ не выслушав, тот глуп, и стыд ему."
+  }
+ ]
+}
