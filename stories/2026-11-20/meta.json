@@ -1,0 +1,25 @@
+{
+ "date": "2026-11-20",
+ "ref": "Пс 120:2",
+ "label": "ПСАЛОМ 120:2",
+ "text": "Помощь моя от Господа, сотворившего небо и землю.",
+ "weather": {
+  "now": "+13°",
+  "word": "ясно",
+  "icon": "sun",
+  "day": "+16°",
+  "at": "2026-11-20T09:00",
+  "source": "met.no"
+ },
+ "photo": "https://pixabay.com/photos/fog-trees-vineyard-nature-mystical-7440132/",
+ "photo_id": 7440132,
+ "author": "Nordseher",
+ "tone": "warm",
+ "parts": [
+  {
+   "file": "story.jpg",
+   "label": "ПСАЛОМ 120:2",
+   "text": "Помощь моя от Господа, сотворившего небо и землю."
+  }
+ ]
+}
